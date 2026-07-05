@@ -1,0 +1,495 @@
+// 汇率 API：使用免费的 exchangerate-api.com
+const API_URL = 'https://open.er-api.com/v6/latest/USD'
+const ORDER_KEY = 'currency-widget-order'
+
+// 默认展示的币种（新用户 / 无存档时）
+const DEFAULT_CODES = ['USD', 'CNY', 'MOP', 'TRY', 'HKD', 'SGD']
+const MIN_CURRENCIES = 2 // 换算至少需要两个币种
+
+// 手写覆盖：保留原有的简短叫法；以及 Intl 不认识的非 ISO 代码
+const NAME_OVERRIDES = {
+  USD: '美元', CNY: '人民币', MOP: '澳门元', TRY: '土耳其里拉', HKD: '港币', SGD: '新元',
+  CNH: '离岸人民币', GGP: '根西镑', IMP: '马恩岛镑', JEP: '泽西镑',
+  KID: '基里巴斯元', TVD: '图瓦卢元', FOK: '法罗克朗', XCG: '加勒比盾',
+}
+
+// 无法从代码前两位推导国旗的特殊代码（X 开头为超国家货币）
+const FLAG_OVERRIDES = {
+  ANG: '🇨🇼', XAF: '🌍', XOF: '🌍', XCD: '🌴', XCG: '🌴',
+  XPF: '🌺', XDR: '🏦', EUR: '🇪🇺',
+}
+
+let rates = {} // 汇率数据（以 USD 为基准）
+let selectedCodes = [...DEFAULT_CODES] // 当前展示的币种（含顺序）
+let baseCurrency = 'USD' // 当前基准货币
+let baseAmount = 1 // 当前基准金额
+
+// ---- 币种元数据：中文名用 Intl 自动生成，旗帜从代码前两位推导 ----
+const displayNames = new Intl.DisplayNames(['zh-CN'], { type: 'currency', fallback: 'code' })
+const metaCache = new Map()
+
+function getMeta(code) {
+  let meta = metaCache.get(code)
+  if (meta) return meta
+
+  let name = NAME_OVERRIDES[code]
+  if (!name) {
+    try { name = displayNames.of(code) } catch { name = code }
+  }
+
+  let flag = FLAG_OVERRIDES[code]
+  if (!flag) {
+    // ISO 货币代码前两位即国家/地区代码，转为区域指示符 emoji
+    flag = String.fromCodePoint(...[...code.slice(0, 2)].map(c => 0x1F1A5 + c.charCodeAt(0)))
+  }
+
+  meta = { code, name, flag }
+  metaCache.set(code, meta)
+  return meta
+}
+
+// ---- 币种列表持久化（iframe 里 localStorage 可能被禁用，静默降级）----
+// 存档同时承载「选了哪些」和「顺序」；恢复时过滤掉 API 已不返回的代码
+function loadOrder() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ORDER_KEY))
+    if (Array.isArray(saved) && saved.length >= MIN_CURRENCIES) {
+      selectedCodes = saved
+    }
+  } catch { /* 忽略 */ }
+}
+
+function persistOrder() {
+  try {
+    localStorage.setItem(ORDER_KEY, JSON.stringify(selectedCodes))
+  } catch { /* 忽略 */ }
+}
+
+// 获取汇率数据
+async function fetchRates() {
+  try {
+    const res = await fetch(API_URL)
+    const data = await res.json()
+    if (data.result === 'success') {
+      rates = data.rates
+      // 剔除 API 已不支持的存档残留
+      selectedCodes = selectedCodes.filter(code => code in rates)
+      if (selectedCodes.length < MIN_CURRENCIES) selectedCodes = [...DEFAULT_CODES]
+      render()
+    } else {
+      throw new Error('API 返回失败')
+    }
+  } catch (err) {
+    document.getElementById('app').innerHTML = `
+      <div class="error">无法加载汇率数据</div>
+    `
+  }
+}
+
+// 计算目标货币金额
+function convert(fromCode, toCode, amount) {
+  // 先转换为 USD，再转换为目标货币
+  const usdAmount = amount / rates[fromCode]
+  return usdAmount * rates[toCode]
+}
+
+// 四舍六入五成双（银行家舍入）保留两位小数
+// 不用 toFixed：它受二进制浮点表示影响，舍入方向不可预期（如 (1.005).toFixed(2) === "1.00"）
+// 通过字符串拼指数（"6.795e2" -> 679.5）做移位，避免乘法引入的浮点误差
+function bankersRound(value, decimals = 2) {
+  const shifted = Number(`${value}e${decimals}`)
+  if (!Number.isFinite(shifted)) return value
+  const floor = Math.floor(shifted)
+  const diff = shifted - floor
+  let result
+  if (diff > 0.5) {
+    result = floor + 1
+  } else if (diff < 0.5) {
+    result = floor
+  } else {
+    // 恰好一半：舍入到相邻的偶数
+    result = floor % 2 === 0 ? floor : floor + 1
+  }
+  return Number(`${result}e-${decimals}`)
+}
+
+// 格式化为两位小数的显示文本
+function formatAmount(value) {
+  return bankersRound(value, 2).toFixed(2)
+}
+
+// 拖动手柄图标（两列圆点）
+const HANDLE_SVG = `
+  <svg viewBox="0 0 10 16" aria-hidden="true">
+    <circle cx="3" cy="3" r="1.4"/><circle cx="7" cy="3" r="1.4"/>
+    <circle cx="3" cy="8" r="1.4"/><circle cx="7" cy="8" r="1.4"/>
+    <circle cx="3" cy="13" r="1.4"/><circle cx="7" cy="13" r="1.4"/>
+  </svg>
+`
+
+// 重建主列表（初始化和币种增减时调用；输入过程中的联动更新走 updateOtherValues，不重建）
+function render() {
+  const app = document.getElementById('app')
+  app.className = 'currency-widget'
+
+  // 基准货币可能刚被移除
+  if (!selectedCodes.includes(baseCurrency)) {
+    baseCurrency = selectedCodes[0]
+    baseAmount = 1
+  }
+
+  const html = selectedCodes.map(code => {
+    const currency = getMeta(code)
+    const isBase = code === baseCurrency
+    const amount = isBase
+      ? baseAmount
+      : convert(baseCurrency, code, baseAmount)
+
+    return `
+      <div class="currency-row ${isBase ? 'is-base' : ''}" data-code="${code}">
+        <span class="drag-handle" title="拖动排序">${HANDLE_SVG}</span>
+        <div class="currency-info">
+          <span class="currency-flag">${currency.flag}</span>
+          <span class="currency-name">${currency.name}</span>
+          <span class="currency-code">${code}</span>
+        </div>
+        <input
+          type="text"
+          inputmode="decimal"
+          class="currency-value"
+          data-code="${code}"
+          value="${formatAmount(amount)}"
+        />
+      </div>
+    `
+  }).join('')
+
+  app.innerHTML = html
+
+  // 行内输入事件（app 级监听在 init 中一次性绑定）
+  app.querySelectorAll('.currency-value').forEach(input => {
+    input.addEventListener('focus', handleFocus)
+    input.addEventListener('input', handleInput)
+    input.addEventListener('blur', handleBlur)
+  })
+}
+
+// ---- 滚动指示器：自绘 2px 细浮层，滚动时出现、停止后淡出，不占布局空间 ----
+let indicatorEl = null
+
+function showScrollThumb(el) {
+  const { scrollHeight, clientHeight, scrollTop } = el
+  if (scrollHeight <= clientHeight) return
+
+  if (!indicatorEl) {
+    indicatorEl = document.createElement('div')
+    indicatorEl.className = 'scroll-indicator'
+    document.body.appendChild(indicatorEl)
+  }
+
+  // 按可视比例算滑块高度与位置，映射到滚动容器在视口中的区间
+  const rect = el.getBoundingClientRect()
+  const trackTop = rect.top + 4
+  const trackHeight = rect.height - 8
+  const thumbHeight = Math.max(trackHeight * (clientHeight / scrollHeight), 16)
+  const progress = scrollTop / (scrollHeight - clientHeight)
+  const thumbTop = trackTop + (trackHeight - thumbHeight) * progress
+
+  indicatorEl.style.top = `${thumbTop}px`
+  indicatorEl.style.height = `${thumbHeight}px`
+  indicatorEl.classList.add('is-visible')
+
+  clearTimeout(indicatorEl._hideTimer)
+  indicatorEl._hideTimer = setTimeout(() => indicatorEl.classList.remove('is-visible'), 800)
+}
+
+// 更新基准货币行的高亮样式
+function setBaseRow() {
+  document.querySelectorAll('.currency-row').forEach(row => {
+    row.classList.toggle('is-base', row.dataset.code === baseCurrency)
+  })
+}
+
+// 处理焦点事件：只更新状态和样式，绝不重建 DOM（否则焦点会丢失、无法输入）
+function handleFocus(e) {
+  baseCurrency = e.target.dataset.code
+  baseAmount = parseFloat(e.target.value) || 0
+  setBaseRow()
+  const input = e.target
+  requestAnimationFrame(() => input.select())
+}
+
+// 处理输入事件
+function handleInput(e) {
+  const value = e.target.value
+  // 只允许数字和小数点
+  const cleaned = value.replace(/[^\d.]/g, '')
+  if (cleaned !== value) {
+    e.target.value = cleaned
+  }
+
+  const amount = parseFloat(cleaned)
+  if (!isNaN(amount) && amount >= 0) {
+    baseAmount = amount
+    baseCurrency = e.target.dataset.code
+    updateOtherValues(e.target)
+  }
+}
+
+// 实时更新其他货币值（不重新渲染整个页面）
+function updateOtherValues(currentInput) {
+  document.querySelectorAll('.currency-value').forEach(input => {
+    if (input !== currentInput) {
+      const targetCode = input.dataset.code
+      const amount = convert(baseCurrency, targetCode, baseAmount)
+      input.value = formatAmount(amount)
+    }
+  })
+  setBaseRow()
+}
+
+// 处理失焦事件
+function handleBlur(e) {
+  const value = parseFloat(e.target.value)
+  if (isNaN(value) || value < 0) {
+    e.target.value = '0.00'
+    baseAmount = 0
+  } else {
+    e.target.value = formatAmount(value)
+  }
+}
+
+// ---- 拖动排序（Pointer Events，鼠标和触摸通用）----
+let drag = null
+const EDGE_ZONE = 28 // 距容器上下边缘多少像素内触发自动滚动
+const MAX_SCROLL_SPEED = 9 // 自动滚动最大速度（px/帧）
+
+function onDragStart(e) {
+  const handle = e.target.closest('.drag-handle')
+  if (!handle) return
+  e.preventDefault()
+
+  const row = handle.closest('.currency-row')
+  const list = row.parentElement
+  const gap = parseFloat(getComputedStyle(list).rowGap) || 0
+
+  drag = {
+    row,
+    list,
+    startY: e.clientY,
+    lastY: e.clientY,
+    step: row.offsetHeight + gap, // 每交换一次位置，布局位移一行的高度
+    speed: 0, // 当前自动滚动速度
+    raf: null,
+  }
+  row.classList.add('dragging')
+  handle.setPointerCapture(e.pointerId)
+
+  document.addEventListener('pointermove', onDragMove)
+  document.addEventListener('pointerup', onDragEnd)
+  document.addEventListener('pointercancel', onDragEnd)
+}
+
+function onDragMove(e) {
+  if (!drag) return
+  drag.lastY = e.clientY
+  applyDrag()
+  maybeAutoScroll()
+}
+
+// 根据当前指针位置更新拖动行的位移，并检查是否需要与相邻行交换
+function applyDrag() {
+  const { row } = drag
+  row.style.transform = `translateY(${drag.lastY - drag.startY}px)`
+
+  const rect = row.getBoundingClientRect()
+  const center = rect.top + rect.height / 2
+
+  // 拖过下一行的中线：交换位置，并补偿布局位移让视觉位置连续
+  const next = row.nextElementSibling
+  if (next) {
+    const r = next.getBoundingClientRect()
+    if (center > r.top + r.height / 2) {
+      next.after(row)
+      drag.startY += drag.step
+      row.style.transform = `translateY(${drag.lastY - drag.startY}px)`
+      return
+    }
+  }
+
+  // 拖过上一行的中线：同理
+  const prev = row.previousElementSibling
+  if (prev) {
+    const r = prev.getBoundingClientRect()
+    if (center < r.top + r.height / 2) {
+      prev.before(row)
+      drag.startY -= drag.step
+      row.style.transform = `translateY(${drag.lastY - drag.startY}px)`
+    }
+  }
+}
+
+// 指针靠近容器上下边缘时启动自动滚动，越靠近边缘速度越快
+function maybeAutoScroll() {
+  const rect = drag.list.getBoundingClientRect()
+  const y = drag.lastY
+  let speed = 0
+  if (y < rect.top + EDGE_ZONE) {
+    speed = -Math.ceil(Math.min(1, (rect.top + EDGE_ZONE - y) / EDGE_ZONE) * MAX_SCROLL_SPEED)
+  } else if (y > rect.bottom - EDGE_ZONE) {
+    speed = Math.ceil(Math.min(1, (y - (rect.bottom - EDGE_ZONE)) / EDGE_ZONE) * MAX_SCROLL_SPEED)
+  }
+  drag.speed = speed
+  if (speed !== 0 && drag.raf === null) {
+    drag.raf = requestAnimationFrame(autoScrollTick)
+  }
+}
+
+function autoScrollTick() {
+  if (!drag || drag.speed === 0) {
+    if (drag) drag.raf = null
+    return
+  }
+  const list = drag.list
+  const before = list.scrollTop
+  list.scrollTop += drag.speed
+  const delta = list.scrollTop - before
+
+  if (delta === 0) {
+    // 已滚到头/滚到底
+    drag.speed = 0
+    drag.raf = null
+    return
+  }
+
+  // 容器滚动了 delta，行的布局位置随内容整体偏移，
+  // 同步修正 startY 才能让被拖行保持吸附在指针下方
+  drag.startY -= delta
+  applyDrag()
+  showScrollThumb(list)
+
+  drag.raf = requestAnimationFrame(autoScrollTick)
+}
+
+function onDragEnd() {
+  if (!drag) return
+  if (drag.raf !== null) cancelAnimationFrame(drag.raf)
+  drag.row.classList.remove('dragging')
+  drag.row.style.transform = ''
+  drag = null
+
+  document.removeEventListener('pointermove', onDragMove)
+  document.removeEventListener('pointerup', onDragEnd)
+  document.removeEventListener('pointercancel', onDragEnd)
+
+  // 从 DOM 读取拖动后的最终顺序
+  selectedCodes = [...document.querySelectorAll('.currency-row')].map(row => row.dataset.code)
+  persistOrder()
+}
+
+// ---- 币种管理面板（双击列表空白处打开）----
+let managerEl = null
+
+function openManager() {
+  if (!Object.keys(rates).length) return
+
+  if (!managerEl) {
+    managerEl = document.createElement('div')
+    managerEl.className = 'manager'
+    managerEl.innerHTML = `
+      <div class="manager-head">
+        <span class="manager-title">管理币种</span>
+        <span class="manager-count"></span>
+        <button class="manager-close" title="关闭" aria-label="关闭">✕</button>
+      </div>
+      <input class="manager-search" type="text" placeholder="搜索代码或名称…" />
+      <div class="manager-list"></div>
+    `
+    document.body.appendChild(managerEl)
+
+    managerEl.querySelector('.manager-close').addEventListener('click', closeManager)
+    managerEl.querySelector('.manager-search').addEventListener('input', renderManagerList)
+    managerEl.querySelector('.manager-list').addEventListener('click', onManagerToggle)
+    managerEl.querySelector('.manager-list').addEventListener('scroll', e => showScrollThumb(e.target), { passive: true })
+  }
+
+  managerEl.querySelector('.manager-search').value = ''
+  renderManagerList()
+  managerEl.classList.add('is-open')
+  managerEl.querySelector('.manager-search').focus()
+}
+
+function closeManager() {
+  managerEl.classList.remove('is-open')
+  render() // 用最新币种列表重建主界面
+}
+
+// 渲染管理面板的币种列表：已选的排最前（按当前顺序），其余按代码字母序
+function renderManagerList() {
+  const keyword = managerEl.querySelector('.manager-search').value.trim().toLowerCase()
+  const rest = Object.keys(rates).filter(c => !selectedCodes.includes(c)).sort()
+  const all = [...selectedCodes, ...rest]
+
+  const matched = keyword
+    ? all.filter(code => {
+        const meta = getMeta(code)
+        return code.toLowerCase().includes(keyword) || meta.name.toLowerCase().includes(keyword)
+      })
+    : all
+
+  managerEl.querySelector('.manager-count').textContent = `已选 ${selectedCodes.length}`
+  managerEl.querySelector('.manager-list').innerHTML = matched.length
+    ? matched.map(code => {
+        const meta = getMeta(code)
+        const added = selectedCodes.includes(code)
+        return `
+          <button class="manager-item ${added ? 'is-added' : ''}" data-code="${code}">
+            <span class="currency-flag">${meta.flag}</span>
+            <span class="manager-item-name">${meta.name}</span>
+            <span class="manager-item-code">${code}</span>
+            <span class="manager-mark">${added ? '✓' : '+'}</span>
+          </button>
+        `
+      }).join('')
+    : '<div class="manager-empty">无匹配币种</div>'
+}
+
+function onManagerToggle(e) {
+  const item = e.target.closest('.manager-item')
+  if (!item) return
+  const code = item.dataset.code
+
+  if (selectedCodes.includes(code)) {
+    if (selectedCodes.length <= MIN_CURRENCIES) {
+      // 至少保留两个币种，闪烁提示
+      item.classList.remove('shake')
+      void item.offsetWidth // 重启动画
+      item.classList.add('shake')
+      return
+    }
+    selectedCodes = selectedCodes.filter(c => c !== code)
+  } else {
+    selectedCodes = [...selectedCodes, code]
+  }
+  persistOrder()
+  renderManagerList()
+}
+
+// ---- 初始化 ----
+function init() {
+  const app = document.getElementById('app')
+
+  // app 级监听只绑定一次（render 会反复重建子节点）
+  app.addEventListener('pointerdown', onDragStart)
+  app.addEventListener('scroll', () => showScrollThumb(app), { passive: true })
+  app.addEventListener('dblclick', e => {
+    // 仅空白处（列表行以外）触发
+    if (e.target.closest('.currency-row')) return
+    openManager()
+  })
+
+  loadOrder()
+  fetchRates()
+}
+
+init()

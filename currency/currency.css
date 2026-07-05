@@ -1,0 +1,404 @@
+:root {
+  --bg-primary: oklch(98.5% 0.005 85);
+  --bg-hover: oklch(96% 0.01 85);
+  --bg-active: oklch(92% 0.015 85);
+  --text-primary: oklch(25% 0.02 85);
+  --text-secondary: oklch(55% 0.015 85);
+  --text-muted: oklch(68% 0.01 85);
+  --accent: oklch(50% 0.14 250);
+  --accent-soft: oklch(93% 0.04 250);
+  --border: oklch(88% 0.008 85);
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: clamp(11px, 2.5vmin, 14px);
+}
+
+.currency-widget {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  /* 四边等宽留白；滚动指示器为浮层，不占布局空间 */
+  padding: 10px;
+  gap: 4px;
+  container-type: size;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 隐藏原生滚动条，滚动位置由自绘的细指示器（.scroll-indicator）呈现 */
+  scrollbar-width: none;
+}
+
+.currency-widget::-webkit-scrollbar {
+  display: none;
+}
+
+.loading,
+.error {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  font-size: clamp(12px, 2.8vmin, 15px);
+  color: var(--text-secondary);
+}
+
+/* 纯指示用滚动条：2px 细浮层，贴右缘垂直悬浮，不参与布局、不可交互 */
+.scroll-indicator {
+  position: fixed;
+  right: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: oklch(70% 0.01 85 / 0.75);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 200; /* 高于管理面板（100），两处列表共用 */
+  transition: opacity 250ms ease-out;
+}
+
+.scroll-indicator.is-visible {
+  opacity: 1;
+}
+
+.error {
+  color: oklch(55% 0.15 25);
+}
+
+.currency-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: clamp(6px, 1.5vmin, 10px);
+  /* 行高按容器内容区高度等分：恰好显示 5 整行（扣除 4 个 4px gap；cqh 基于内容盒） */
+  height: calc((100cqh - 16px) / 5);
+  padding: 0 clamp(6px, 1.5vmin, 10px);
+  background: transparent;
+  /* 与外层卡片圆角和谐：外层 19px - 四周留白 10px = 9px */
+  border-radius: 9px;
+  transition: background-color 180ms ease-out;
+  flex-shrink: 0;
+}
+
+.currency-row:hover {
+  background: var(--bg-hover);
+}
+
+.currency-row.is-base {
+  background: var(--accent-soft);
+}
+
+.currency-row.is-base:hover {
+  background: color-mix(in oklch, var(--accent-soft) 85%, var(--accent) 15%);
+}
+
+/* 拖动中的行：悬浮在其他行之上 */
+.currency-row.dragging {
+  position: relative;
+  z-index: 10;
+  background: white;
+  box-shadow: 0 4px 16px oklch(25% 0.02 85 / 0.18);
+  transition: none;
+}
+
+.drag-handle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(14px, 3vmin, 18px);
+  height: 100%;
+  color: var(--text-muted);
+  cursor: grab;
+  /* 关键：禁用浏览器默认触摸手势，否则触摸拖动会触发页面滚动 */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.drag-handle svg {
+  width: clamp(8px, 1.8vmin, 10px);
+  height: auto;
+  fill: currentColor;
+  opacity: 0.55;
+  transition: opacity 150ms ease-out;
+}
+
+.currency-row:hover .drag-handle svg,
+.dragging .drag-handle svg {
+  opacity: 1;
+}
+
+.dragging .drag-handle {
+  cursor: grabbing;
+}
+
+.currency-info {
+  display: flex;
+  align-items: baseline;
+  gap: clamp(5px, 1.2vmin, 8px);
+  min-width: 0;
+}
+
+.currency-flag {
+  font-size: clamp(13px, 8cqh, 18px);
+  line-height: 1;
+  align-self: center;
+}
+
+.currency-name {
+  font-weight: 600;
+  font-size: clamp(13px, 8cqh, 18px);
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.currency-code {
+  font-size: clamp(9px, 2vmin, 11px);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.currency-value {
+  font-family: inherit;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  font-size: clamp(14px, 8.5cqh, 19px);
+  color: var(--text-primary);
+  text-align: right;
+  background: transparent;
+  border: none;
+  outline: none;
+  padding: clamp(4px, 1vmin, 6px) clamp(6px, 1.5vmin, 8px);
+  border-radius: clamp(4px, 1vmin, 6px);
+  min-width: 0;
+  width: clamp(70px, 26cqw, 130px);
+  transition: all 180ms ease-out;
+}
+
+.currency-value:hover {
+  background: var(--bg-hover);
+}
+
+.currency-value:focus {
+  background: white;
+  box-shadow: 0 0 0 2px var(--accent);
+  color: var(--accent);
+}
+
+.is-base .currency-value {
+  color: var(--accent);
+}
+
+/* ---- 币种管理面板（双击空白处打开）---- */
+.manager {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  background: var(--bg-primary);
+  padding: 10px;
+  gap: clamp(6px, 1.5vmin, 10px);
+}
+
+.manager.is-open {
+  display: flex;
+  animation: manager-in 180ms ease-out;
+}
+
+@keyframes manager-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+.manager-head {
+  display: flex;
+  align-items: center;
+  gap: clamp(6px, 1.5vmin, 10px);
+  flex-shrink: 0;
+}
+
+.manager-title {
+  font-weight: 600;
+  font-size: clamp(12px, 2.8vmin, 15px);
+}
+
+.manager-count {
+  font-size: clamp(9px, 2vmin, 11px);
+  color: var(--text-muted);
+  margin-right: auto;
+}
+
+.manager-close {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: clamp(12px, 2.8vmin, 15px);
+  line-height: 1;
+  padding: clamp(4px, 1vmin, 6px);
+  border-radius: clamp(4px, 1vmin, 6px);
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+
+.manager-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.manager-search {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: clamp(11px, 2.5vmin, 13px);
+  color: var(--text-primary);
+  background: white;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: clamp(5px, 1.2vmin, 8px) clamp(8px, 2vmin, 12px);
+  outline: none;
+  transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+}
+
+.manager-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 25%, transparent);
+}
+
+.manager-search::placeholder {
+  color: var(--text-muted);
+}
+
+.manager-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  /* 与主列表一致：隐藏原生滚动条，用自绘指示器 */
+  scrollbar-width: none;
+}
+
+.manager-list::-webkit-scrollbar {
+  display: none;
+}
+
+.manager-item {
+  display: flex;
+  align-items: center;
+  gap: clamp(5px, 1.2vmin, 8px);
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: clamp(11px, 2.5vmin, 13px);
+  color: var(--text-primary);
+  text-align: left;
+  padding: clamp(4px, 1vmin, 7px) clamp(6px, 1.5vmin, 10px);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+
+.manager-item:hover {
+  background: var(--bg-hover);
+}
+
+.manager-item.is-added {
+  background: var(--accent-soft);
+}
+
+.manager-item-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.manager-item-code {
+  font-size: clamp(9px, 2vmin, 11px);
+  color: var(--text-muted);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.manager-mark {
+  width: clamp(14px, 3vmin, 18px);
+  text-align: center;
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.is-added .manager-mark {
+  color: var(--accent);
+}
+
+.manager-empty {
+  padding: clamp(12px, 3vmin, 20px);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: clamp(11px, 2.5vmin, 13px);
+}
+
+.manager-item.shake {
+  animation: shake 300ms ease-out;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+/* 正方形布局适配 (211×211)：显示 6 整行，字号相应缩小（扣除 5 个 4px gap） */
+@container (aspect-ratio < 1.5) {
+  .currency-row {
+    height: calc((100cqh - 20px) / 6);
+    gap: clamp(4px, 1vmin, 8px);
+  }
+
+  .currency-info {
+    gap: clamp(3px, 0.8vmin, 6px);
+  }
+
+  .currency-flag {
+    font-size: clamp(11px, 5.6cqh, 14px);
+  }
+
+  .currency-name {
+    font-size: clamp(11px, 5.6cqh, 14px);
+  }
+
+  .currency-code {
+    font-size: clamp(8px, 1.8vmin, 10px);
+  }
+
+  .currency-value {
+    font-size: clamp(12px, 6.2cqh, 15px);
+    width: clamp(60px, 30cqw, 95px);
+  }
+}
+
+/* 极窄布局优化 */
+@container (width < 250px) {
+  .currency-code {
+    display: none;
+  }
+
+  .currency-value {
+    width: clamp(55px, 20vw, 80px);
+  }
+}

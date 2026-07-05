@@ -1,0 +1,17 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: "MiSans VF", system-ui, -apple-system, Twemoji Mozilla, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+}

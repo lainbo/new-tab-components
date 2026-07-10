@@ -507,6 +507,17 @@ function ensureManager() {
   managerListEl.addEventListener('scroll', e => showScrollThumb(e.target), { passive: true })
 }
 
+// 面板从 display:none 切回 flex 后需等布局完成，scrollTop 才会生效（类似 nextTick）
+function resetManagerListScroll() {
+  managerListEl.scrollTop = 0
+  requestAnimationFrame(() => {
+    managerListEl.scrollTop = 0
+    requestAnimationFrame(() => {
+      managerListEl.scrollTop = 0
+    })
+  })
+}
+
 function openManager() {
   if (!Object.keys(rates).length) return
 
@@ -517,10 +528,12 @@ function openManager() {
   managerSearchEl.value = ''
   renderManagerList()
   managerEl.classList.add('is-open')
+  resetManagerListScroll()
   managerSearchEl.focus()
 }
 
 function closeManager() {
+  managerListEl.scrollTop = 0
   managerEl.classList.remove('is-open')
   const active = document.activeElement
   if (active?.matches('.currency-value')) active.blur()

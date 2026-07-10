@@ -240,18 +240,13 @@ function renderLoading() {
 }
 
 // 同步主列表（初始化和币种增减时调用；输入过程中的联动更新走 updateOtherValues，不重建）
-// reset：管理面板关闭后回到初始态（基准=首行、金额=1、清除焦点）
-function render({ reset = false } = {}) {
+function render() {
   const app = document.getElementById('app')
   app.className = 'currency-widget'
   app.removeAttribute('aria-busy')
 
-  if (reset) {
-    baseCurrency = selectedCodes[0]
-    baseAmount = 1
-    const active = document.activeElement
-    if (active?.matches('.currency-value')) active.blur()
-  } else if (!selectedCodes.includes(baseCurrency)) {
+  // 仅当基准货币被从列表移除时才回退到首行
+  if (!selectedCodes.includes(baseCurrency)) {
     baseCurrency = selectedCodes[0]
     baseAmount = 1
   }
@@ -527,7 +522,9 @@ function openManager() {
 
 function closeManager() {
   managerEl.classList.remove('is-open')
-  render({ reset: true }) // 列表有结构性变化，回到初始态
+  const active = document.activeElement
+  if (active?.matches('.currency-value')) active.blur()
+  render() // 同步新列表，保留当前基准货币和金额
 }
 
 // 渲染管理面板列表：顺序沿用 managerListOrder（打开时确定），搜索只做过滤

@@ -42,7 +42,6 @@ body {
   display: none;
 }
 
-.loading,
 .error {
   display: flex;
   align-items: center;
@@ -199,6 +198,43 @@ body {
 
 .is-base .currency-value {
   color: var(--accent);
+}
+
+/* 加载中：数字区骨架屏，名称/旗帜立即可见 */
+.currency-widget.is-loading .drag-handle {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.value-skeleton {
+  display: block;
+  justify-self: end;
+  height: clamp(14px, 5.5cqh, 18px);
+  width: clamp(70px, 26cqw, 130px);
+  border-radius: clamp(4px, 1vmin, 6px);
+  background: linear-gradient(
+    90deg,
+    var(--bg-active) 0%,
+    var(--bg-hover) 45%,
+    var(--bg-active) 90%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+
+.is-base .value-skeleton {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--accent-soft) 70%, var(--bg-active)) 0%,
+    color-mix(in oklch, var(--accent-soft) 40%, white) 45%,
+    color-mix(in oklch, var(--accent-soft) 70%, var(--bg-active)) 90%
+  );
+  background-size: 200% 100%;
+}
+
+@keyframes skeleton-shimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 /* ---- 币种管理面板（双击空白处打开）---- */
@@ -390,6 +426,11 @@ body {
     font-size: clamp(12px, 6.2cqh, 15px);
     width: clamp(60px, 30cqw, 95px);
   }
+
+  .value-skeleton {
+    height: clamp(12px, 4.5cqh, 15px);
+    width: clamp(60px, 30cqw, 95px);
+  }
 }
 
 /* 极窄布局优化 */
@@ -399,6 +440,10 @@ body {
   }
 
   .currency-value {
+    width: clamp(55px, 20vw, 80px);
+  }
+
+  .value-skeleton {
     width: clamp(55px, 20vw, 80px);
   }
 }

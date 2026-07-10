@@ -1,3 +1,5 @@
+import { el } from '../shared/dom.js'
+
 // 汇率 API：使用免费的 exchangerate-api.com
 const API_URL = 'https://open.er-api.com/v6/latest/USD'
 const ORDER_KEY = 'currency-widget-order'
@@ -80,9 +82,9 @@ async function fetchRates() {
       throw new Error('API 返回失败')
     }
   } catch (err) {
-    document.getElementById('app').innerHTML = `
-      <div class="error">无法加载汇率数据</div>
-    `
+    document.getElementById('app').replaceChildren(
+      el('div', { class: 'error' }, '无法加载汇率数据'),
+    )
   }
 }
 
@@ -127,10 +129,62 @@ const HANDLE_SVG = `
   </svg>
 `
 
+function buildRow(code, { loading = false } = {}) {
+  const currency = getMeta(code)
+  const isBase = code === baseCurrency
+  const valueEl = loading
+    ? el('span', { class: 'value-skeleton', attrs: { 'aria-hidden': 'true' } })
+    : el('input', {
+        type: 'text',
+        inputmode: 'decimal',
+        class: 'currency-value',
+        dataset: { code },
+        value: formatAmount(
+          isBase ? baseAmount : convert(baseCurrency, code, baseAmount),
+        ),
+      })
+
+  return el('div', {
+    class: `currency-row${isBase ? ' is-base' : ''}`,
+    dataset: { code },
+  },
+    el('span', { class: 'drag-handle', title: '拖动排序', html: HANDLE_SVG }),
+    el('div', { class: 'currency-info' },
+      el('span', { class: 'currency-flag' }, currency.flag),
+      el('span', { class: 'currency-name' }, currency.name),
+      el('span', { class: 'currency-code' }, code),
+    ),
+    valueEl,
+  )
+}
+
+function buildManagerItem(code) {
+  const meta = getMeta(code)
+  const added = selectedCodes.includes(code)
+  return el('button', {
+    class: `manager-item${added ? ' is-added' : ''}`,
+    dataset: { code },
+  },
+    el('span', { class: 'currency-flag' }, meta.flag),
+    el('span', { class: 'manager-item-name' }, meta.name),
+    el('span', { class: 'manager-item-code' }, code),
+    el('span', { class: 'manager-mark' }, added ? '✓' : '+'),
+  )
+}
+
+// 联网前：先渲染币种列表，数字区显示骨架屏
+function renderLoading() {
+  const app = document.getElementById('app')
+  app.className = 'currency-widget is-loading'
+  app.setAttribute('aria-busy', 'true')
+  app.replaceChildren(...selectedCodes.map(code => buildRow(code, { loading: true })))
+}
+
 // 重建主列表（初始化和币种增减时调用；输入过程中的联动更新走 updateOtherValues，不重建）
 function render() {
   const app = document.getElementById('app')
   app.className = 'currency-widget'
+  app.removeAttribute('aria-busy')
 
   // 基准货币可能刚被移除
   if (!selectedCodes.includes(baseCurrency)) {
@@ -138,47 +192,14 @@ function render() {
     baseAmount = 1
   }
 
-  const html = selectedCodes.map(code => {
-    const currency = getMeta(code)
-    const isBase = code === baseCurrency
-    const amount = isBase
-      ? baseAmount
-      : convert(baseCurrency, code, baseAmount)
-
-    return `
-      <div class="currency-row ${isBase ? 'is-base' : ''}" data-code="${code}">
-        <span class="drag-handle" title="拖动排序">${HANDLE_SVG}</span>
-        <div class="currency-info">
-          <span class="currency-flag">${currency.flag}</span>
-          <span class="currency-name">${currency.name}</span>
-          <span class="currency-code">${code}</span>
-        </div>
-        <input
-          type="text"
-          inputmode="decimal"
-          class="currency-value"
-          data-code="${code}"
-          value="${formatAmount(amount)}"
-        />
-      </div>
-    `
-  }).join('')
-
-  app.innerHTML = html
-
-  // 行内输入事件（app 级监听在 init 中一次性绑定）
-  app.querySelectorAll('.currency-value').forEach(input => {
-    input.addEventListener('focus', handleFocus)
-    input.addEventListener('input', handleInput)
-    input.addEventListener('blur', handleBlur)
-  })
+  app.replaceChildren(...selectedCodes.map(code => buildRow(code)))
 }
 
 // ---- 滚动指示器：自绘 2px 细浮层，滚动时出现、停止后淡出，不占布局空间 ----
 let indicatorEl = null
 
-function showScrollThumb(el) {
-  const { scrollHeight, clientHeight, scrollTop } = el
+function showScrollThumb(scrollEl) {
+  const { scrollHeight, clientHeight, scrollTop } = scrollEl
   if (scrollHeight <= clientHeight) return
 
   if (!indicatorEl) {
@@ -188,7 +209,7 @@ function showScrollThumb(el) {
   }
 
   // 按可视比例算滑块高度与位置，映射到滚动容器在视口中的区间
-  const rect = el.getBoundingClientRect()
+  const rect = scrollEl.getBoundingClientRect()
   const trackTop = rect.top + 4
   const trackHeight = rect.height - 8
   const thumbHeight = Math.max(trackHeight * (clientHeight / scrollHeight), 16)
@@ -265,6 +286,7 @@ const EDGE_ZONE = 28 // 距容器上下边缘多少像素内触发自动滚动
 const MAX_SCROLL_SPEED = 9 // 自动滚动最大速度（px/帧）
 
 function onDragStart(e) {
+  if (e.currentTarget.classList.contains('is-loading')) return
   const handle = e.target.closest('.drag-handle')
   if (!handle) return
   e.preventDefault()
@@ -389,34 +411,50 @@ function onDragEnd() {
 
 // ---- 币种管理面板（双击列表空白处打开）----
 let managerEl = null
+let managerCountEl = null
+let managerSearchEl = null
+let managerListEl = null
+
+function ensureManager() {
+  if (managerEl) return
+
+  managerCountEl = el('span', { class: 'manager-count' })
+  managerSearchEl = el('input', {
+    class: 'manager-search',
+    type: 'text',
+    placeholder: '搜索代码或名称…',
+  })
+  managerListEl = el('div', { class: 'manager-list' })
+
+  managerEl = el('div', { class: 'manager' },
+    el('div', { class: 'manager-head' },
+      el('span', { class: 'manager-title' }, '管理币种'),
+      managerCountEl,
+      el('button', {
+        class: 'manager-close',
+        title: '关闭',
+        'aria-label': '关闭',
+      }, '✕'),
+    ),
+    managerSearchEl,
+    managerListEl,
+  )
+  document.body.appendChild(managerEl)
+
+  managerEl.querySelector('.manager-close').addEventListener('click', closeManager)
+  managerSearchEl.addEventListener('input', renderManagerList)
+  managerListEl.addEventListener('click', onManagerToggle)
+  managerListEl.addEventListener('scroll', e => showScrollThumb(e.target), { passive: true })
+}
 
 function openManager() {
   if (!Object.keys(rates).length) return
 
-  if (!managerEl) {
-    managerEl = document.createElement('div')
-    managerEl.className = 'manager'
-    managerEl.innerHTML = `
-      <div class="manager-head">
-        <span class="manager-title">管理币种</span>
-        <span class="manager-count"></span>
-        <button class="manager-close" title="关闭" aria-label="关闭">✕</button>
-      </div>
-      <input class="manager-search" type="text" placeholder="搜索代码或名称…" />
-      <div class="manager-list"></div>
-    `
-    document.body.appendChild(managerEl)
-
-    managerEl.querySelector('.manager-close').addEventListener('click', closeManager)
-    managerEl.querySelector('.manager-search').addEventListener('input', renderManagerList)
-    managerEl.querySelector('.manager-list').addEventListener('click', onManagerToggle)
-    managerEl.querySelector('.manager-list').addEventListener('scroll', e => showScrollThumb(e.target), { passive: true })
-  }
-
-  managerEl.querySelector('.manager-search').value = ''
+  ensureManager()
+  managerSearchEl.value = ''
   renderManagerList()
   managerEl.classList.add('is-open')
-  managerEl.querySelector('.manager-search').focus()
+  managerSearchEl.focus()
 }
 
 function closeManager() {
@@ -426,7 +464,7 @@ function closeManager() {
 
 // 渲染管理面板的币种列表：已选的排最前（按当前顺序），其余按代码字母序
 function renderManagerList() {
-  const keyword = managerEl.querySelector('.manager-search').value.trim().toLowerCase()
+  const keyword = managerSearchEl.value.trim().toLowerCase()
   const rest = Object.keys(rates).filter(c => !selectedCodes.includes(c)).sort()
   const all = [...selectedCodes, ...rest]
 
@@ -437,21 +475,12 @@ function renderManagerList() {
       })
     : all
 
-  managerEl.querySelector('.manager-count').textContent = `已选 ${selectedCodes.length}`
-  managerEl.querySelector('.manager-list').innerHTML = matched.length
-    ? matched.map(code => {
-        const meta = getMeta(code)
-        const added = selectedCodes.includes(code)
-        return `
-          <button class="manager-item ${added ? 'is-added' : ''}" data-code="${code}">
-            <span class="currency-flag">${meta.flag}</span>
-            <span class="manager-item-name">${meta.name}</span>
-            <span class="manager-item-code">${code}</span>
-            <span class="manager-mark">${added ? '✓' : '+'}</span>
-          </button>
-        `
-      }).join('')
-    : '<div class="manager-empty">无匹配币种</div>'
+  managerCountEl.textContent = `已选 ${selectedCodes.length}`
+  managerListEl.replaceChildren(
+    ...(matched.length
+      ? matched.map(code => buildManagerItem(code))
+      : [el('div', { class: 'manager-empty' }, '无匹配币种')]),
+  )
 }
 
 function onManagerToggle(e) {
@@ -482,6 +511,18 @@ function init() {
   // app 级监听只绑定一次（render 会反复重建子节点）
   app.addEventListener('pointerdown', onDragStart)
   app.addEventListener('scroll', () => showScrollThumb(app), { passive: true })
+  app.addEventListener('focusin', e => {
+    if (!e.target.matches('.currency-value')) return
+    handleFocus(e)
+  })
+  app.addEventListener('input', e => {
+    if (!e.target.matches('.currency-value')) return
+    handleInput(e)
+  })
+  app.addEventListener('focusout', e => {
+    if (!e.target.matches('.currency-value')) return
+    handleBlur(e)
+  })
   app.addEventListener('dblclick', e => {
     // 仅空白处（列表行以外）触发
     if (e.target.closest('.currency-row')) return
@@ -489,6 +530,7 @@ function init() {
   })
 
   loadOrder()
+  renderLoading()
   fetchRates()
 }
 

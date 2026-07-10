@@ -129,20 +129,28 @@ const HANDLE_SVG = `
   </svg>
 `
 
+function rowAmount(code) {
+  return formatAmount(
+    code === baseCurrency ? baseAmount : convert(baseCurrency, code, baseAmount),
+  )
+}
+
+function buildValueEl(code, { loading = false } = {}) {
+  if (loading) {
+    return el('span', { class: 'value-skeleton', attrs: { 'aria-hidden': 'true' } })
+  }
+  return el('input', {
+    type: 'text',
+    inputmode: 'decimal',
+    class: 'currency-value',
+    dataset: { code },
+    value: rowAmount(code),
+  })
+}
+
 function buildRow(code, { loading = false } = {}) {
   const currency = getMeta(code)
   const isBase = code === baseCurrency
-  const valueEl = loading
-    ? el('span', { class: 'value-skeleton', attrs: { 'aria-hidden': 'true' } })
-    : el('input', {
-        type: 'text',
-        inputmode: 'decimal',
-        class: 'currency-value',
-        dataset: { code },
-        value: formatAmount(
-          isBase ? baseAmount : convert(baseCurrency, code, baseAmount),
-        ),
-      })
 
   return el('div', {
     class: `currency-row${isBase ? ' is-base' : ''}`,
@@ -154,8 +162,59 @@ function buildRow(code, { loading = false } = {}) {
       el('span', { class: 'currency-name' }, currency.name),
       el('span', { class: 'currency-code' }, code),
     ),
-    valueEl,
+    buildValueEl(code, { loading }),
   )
+}
+
+// 原地更新已有行：换骨架/输入框、刷新金额与高亮，不重建整行
+function patchRow(row, code, { loading = false } = {}) {
+  const isBase = code === baseCurrency
+  row.classList.toggle('is-base', isBase)
+
+  const slot = row.lastElementChild
+  const hasInput = slot?.matches('.currency-value')
+
+  if (loading) {
+    if (!slot?.matches('.value-skeleton')) {
+      row.replaceChild(buildValueEl(code, { loading: true }), slot)
+    }
+    return
+  }
+
+  if (hasInput) {
+    slot.value = rowAmount(code)
+    return
+  }
+
+  row.replaceChild(buildValueEl(code), slot ?? null)
+}
+
+// 按 data-code diff 同步列表：增删行、重排顺序、原地 patch 内容
+function syncRows(app, codes, { loading = false } = {}) {
+  const existing = new Map(
+    [...app.querySelectorAll('.currency-row')].map(row => [row.dataset.code, row]),
+  )
+
+  for (const [code, row] of [...existing.entries()]) {
+    if (!codes.includes(code)) {
+      row.remove()
+      existing.delete(code)
+    }
+  }
+
+  for (const code of codes) {
+    if (!existing.has(code)) {
+      existing.set(code, buildRow(code, { loading }))
+    }
+  }
+
+  for (let i = 0; i < codes.length; i++) {
+    const row = existing.get(codes[i])
+    if (app.children[i] !== row) {
+      app.insertBefore(row, app.children[i] ?? null)
+    }
+    patchRow(row, codes[i], { loading })
+  }
 }
 
 function buildManagerItem(code) {
@@ -177,22 +236,27 @@ function renderLoading() {
   const app = document.getElementById('app')
   app.className = 'currency-widget is-loading'
   app.setAttribute('aria-busy', 'true')
-  app.replaceChildren(...selectedCodes.map(code => buildRow(code, { loading: true })))
+  syncRows(app, selectedCodes, { loading: true })
 }
 
-// 重建主列表（初始化和币种增减时调用；输入过程中的联动更新走 updateOtherValues，不重建）
-function render() {
+// 同步主列表（初始化和币种增减时调用；输入过程中的联动更新走 updateOtherValues，不重建）
+// reset：管理面板关闭后回到初始态（基准=首行、金额=1、清除焦点）
+function render({ reset = false } = {}) {
   const app = document.getElementById('app')
   app.className = 'currency-widget'
   app.removeAttribute('aria-busy')
 
-  // 基准货币可能刚被移除
-  if (!selectedCodes.includes(baseCurrency)) {
+  if (reset) {
+    baseCurrency = selectedCodes[0]
+    baseAmount = 1
+    const active = document.activeElement
+    if (active?.matches('.currency-value')) active.blur()
+  } else if (!selectedCodes.includes(baseCurrency)) {
     baseCurrency = selectedCodes[0]
     baseAmount = 1
   }
 
-  app.replaceChildren(...selectedCodes.map(code => buildRow(code)))
+  syncRows(app, selectedCodes)
 }
 
 // ---- 滚动指示器：自绘 2px 细浮层，滚动时出现、停止后淡出，不占布局空间 ----
@@ -414,6 +478,7 @@ let managerEl = null
 let managerCountEl = null
 let managerSearchEl = null
 let managerListEl = null
+let managerListOrder = null // 本次打开面板时的固定顺序，操作过程中不重排
 
 function ensureManager() {
   if (managerEl) return
@@ -451,6 +516,9 @@ function openManager() {
   if (!Object.keys(rates).length) return
 
   ensureManager()
+  // 仅在打开时把已选币种排到最前，方便一眼看到；本次会话内顺序不再变动
+  const rest = Object.keys(rates).filter(c => !selectedCodes.includes(c)).sort()
+  managerListOrder = [...selectedCodes, ...rest]
   managerSearchEl.value = ''
   renderManagerList()
   managerEl.classList.add('is-open')
@@ -459,21 +527,20 @@ function openManager() {
 
 function closeManager() {
   managerEl.classList.remove('is-open')
-  render() // 用最新币种列表重建主界面
+  render({ reset: true }) // 列表有结构性变化，回到初始态
 }
 
-// 渲染管理面板的币种列表：已选的排最前（按当前顺序），其余按代码字母序
+// 渲染管理面板列表：顺序沿用 managerListOrder（打开时确定），搜索只做过滤
 function renderManagerList() {
   const keyword = managerSearchEl.value.trim().toLowerCase()
-  const rest = Object.keys(rates).filter(c => !selectedCodes.includes(c)).sort()
-  const all = [...selectedCodes, ...rest]
+  const order = managerListOrder ?? []
 
   const matched = keyword
-    ? all.filter(code => {
+    ? order.filter(code => {
         const meta = getMeta(code)
         return code.toLowerCase().includes(keyword) || meta.name.toLowerCase().includes(keyword)
       })
-    : all
+    : order
 
   managerCountEl.textContent = `已选 ${selectedCodes.length}`
   managerListEl.replaceChildren(
@@ -481,6 +548,13 @@ function renderManagerList() {
       ? matched.map(code => buildManagerItem(code))
       : [el('div', { class: 'manager-empty' }, '无匹配币种')]),
   )
+}
+
+function patchManagerItem(item, code) {
+  const added = selectedCodes.includes(code)
+  item.classList.toggle('is-added', added)
+  item.querySelector('.manager-mark').textContent = added ? '✓' : '+'
+  managerCountEl.textContent = `已选 ${selectedCodes.length}`
 }
 
 function onManagerToggle(e) {
@@ -501,7 +575,7 @@ function onManagerToggle(e) {
     selectedCodes = [...selectedCodes, code]
   }
   persistOrder()
-  renderManagerList()
+  patchManagerItem(item, code)
 }
 
 // ---- 初始化 ----

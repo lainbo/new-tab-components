@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite --host",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "pnpm build && wrangler pages deploy ./dist --project-name new-tab-components --branch main"
   },
   "dependencies": {
     "vite": "^8.1.3"

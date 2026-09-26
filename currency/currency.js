@@ -242,7 +242,7 @@ function renderLoading() {
 // 同步主列表（初始化和币种增减时调用；输入过程中的联动更新走 updateOtherValues，不重建）
 function render() {
   const app = document.getElementById('app')
-  app.className = 'currency-widget'
+  app.classList.remove('is-loading')
   app.removeAttribute('aria-busy')
 
   // 仅当基准货币被从列表移除时才回退到首行
@@ -252,31 +252,89 @@ function render() {
   }
 
   syncRows(app, selectedCodes)
+  syncBounce(app)
 }
 
-// ---- 滚动指示器：自绘 2px 细浮层，滚动时出现、停止后淡出，不占布局空间 ----
+// ---- 回弹留白：主列表可滚动时首行上方、末行下方各留一段空白，滚进去停下后弹回 ----
+const BOUNCE_SPACE = 40 // 与 CSS 中 .can-bounce 的留白一致
+
+function bounceSpace(el) {
+  return el.classList.contains('can-bounce') ? BOUNCE_SPACE : 0
+}
+
+// 把滚动位置限制在内容区（不含回弹留白）
+function clampScrollTop(el, top) {
+  const space = bounceSpace(el)
+  return Math.min(Math.max(top, space), el.scrollHeight - el.clientHeight - space)
+}
+
+// 内容溢出才启用留白；首次启用时停在首行，之后只把位置限制在内容区内
+function syncBounce(app) {
+  const overflow = app.scrollHeight - app.clientHeight > bounceSpace(app) * 2
+  app.classList.toggle('can-bounce', overflow)
+  if (overflow) app.scrollTop = clampScrollTop(app, app.scrollTop)
+}
+
+// ---- 滚动指示器：贴卡片右缘的 2px 细线，滚进回弹留白时沿圆角继续往上/下跑；滚动时出现、停止后淡出，不占布局空间 ----
+const CARD_RADIUS = 19 // 外层卡片圆角
+const INDICATOR_INSET = 4 // 指示器中线到卡片边缘的距离，转角半径 = 19 - 4
+const THUMB_TIP = 50 // 滚到回弹留白尽头时滑块剩下的长度
 let indicatorEl = null
+let indicatorPath = null
 
 function showScrollThumb(scrollEl) {
   const { scrollHeight, clientHeight, scrollTop } = scrollEl
-  if (scrollHeight <= clientHeight) return
+  const space = bounceSpace(scrollEl)
+  const range = scrollHeight - clientHeight - space * 2 // 内容区的可滚动距离
+  if (range <= 0) return
 
   if (!indicatorEl) {
-    indicatorEl = document.createElement('div')
-    indicatorEl.className = 'scroll-indicator'
+    const SVG_NS = 'http://www.w3.org/2000/svg'
+    indicatorEl = document.createElementNS(SVG_NS, 'svg')
+    indicatorEl.classList.add('scroll-indicator')
+    indicatorPath = document.createElementNS(SVG_NS, 'path')
+    indicatorEl.appendChild(indicatorPath)
     document.body.appendChild(indicatorEl)
   }
 
-  // 按可视比例算滑块高度与位置，映射到滚动容器在视口中的区间
+  // 轨道：卡片右缘的同心圆角线；滚动容器贴着卡片上/下边时，轨道绕进对应圆角
   const rect = scrollEl.getBoundingClientRect()
-  const trackTop = rect.top + 4
-  const trackHeight = rect.height - 8
-  const thumbHeight = Math.max(trackHeight * (clientHeight / scrollHeight), 16)
-  const progress = scrollTop / (scrollHeight - clientHeight)
-  const thumbTop = trackTop + (trackHeight - thumbHeight) * progress
+  const x = innerWidth - INDICATOR_INSET
+  const r = CARD_RADIUS - INDICATOR_INSET
+  const roundTop = rect.top < CARD_RADIUS
+  const roundBottom = innerHeight - rect.bottom < CARD_RADIUS
+  const top = roundTop ? CARD_RADIUS : rect.top + INDICATOR_INSET
+  const bottom = roundBottom ? innerHeight - CARD_RADIUS : rect.bottom - INDICATOR_INSET
+  const arc = Math.PI * r / 2
+  const arcTop = roundTop ? arc : 0
+  const arcBottom = roundBottom ? arc : 0
+  const straight = bottom - top
 
-  indicatorEl.style.top = `${thumbTop}px`
-  indicatorEl.style.height = `${thumbHeight}px`
+  indicatorPath.setAttribute('d', [
+    roundTop ? `M${x - r},${INDICATOR_INSET} A${r},${r} 0 0 1 ${x},${top}` : `M${x},${top}`,
+    `L${x},${bottom}`,
+    roundBottom ? `A${r},${r} 0 0 1 ${x - r},${innerHeight - INDICATOR_INSET}` : '',
+  ].join(' '))
+
+  // 滑块长度按内容可视比例算；内容区滚动时滑块在直线段内移动，
+  // 滚进上/下留白时绕过圆角并滑出轨道端点，滚到留白尽头只剩 THUMB_TIP 长的一点
+  const trackLength = arcTop + straight + arcBottom
+  const thumbLength = Math.max(straight * clientHeight / (clientHeight + range), 16)
+  const tip = Math.min(THUMB_TIP, thumbLength) // 剩下的长度最多是整个滑块
+  const contentStart = arcTop
+  const contentEnd = arcTop + straight - thumbLength
+  const lerp = (from, to, t) => from + (to - from) * Math.min(Math.max(t, 0), 1)
+  let start
+  if (scrollTop < space) {
+    start = lerp(tip - thumbLength, contentStart, scrollTop / space)
+  } else if (scrollTop > space + range) {
+    start = lerp(contentEnd, trackLength - tip, (scrollTop - space - range) / space)
+  } else {
+    start = lerp(contentStart, contentEnd, (scrollTop - space) / range)
+  }
+  indicatorPath.style.strokeDasharray = `${thumbLength} ${trackLength}`
+  indicatorPath.style.strokeDashoffset = -start
+
   indicatorEl.classList.add('is-visible')
 
   clearTimeout(indicatorEl._hideTimer)
@@ -433,7 +491,7 @@ function autoScrollTick() {
   }
   const list = drag.list
   const before = list.scrollTop
-  list.scrollTop += drag.speed
+  list.scrollTop = clampScrollTop(list, before + drag.speed)
   const delta = list.scrollTop - before
 
   if (delta === 0) {
@@ -595,6 +653,10 @@ function init() {
   // app 级监听只绑定一次（render 会反复重建子节点）
   app.addEventListener('pointerdown', onDragStart)
   app.addEventListener('scroll', () => showScrollThumb(app), { passive: true })
+  app.addEventListener('scrollend', () => {
+    const top = clampScrollTop(app, app.scrollTop)
+    if (top !== app.scrollTop) app.scrollTo({ top, behavior: 'smooth' })
+  })
   app.addEventListener('focusin', e => {
     if (!e.target.matches('.currency-value')) return
     handleFocus(e)

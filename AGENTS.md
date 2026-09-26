@@ -50,7 +50,8 @@ currency/           # 汇率组件（目前唯一的路由）
 - **舍入用 `bankersRound()`（四舍六入五成双），禁用 `toFixed`**。`toFixed` 受 IEEE754 影响方向不可预期（`(2.675).toFixed(2) === "2.67"`）。实现用字符串拼十进制指数移位（`"2.675e2"`）避开浮点乘法误差。
 - **拖动排序用 Pointer Events**（鼠标/触摸通用），手柄需 `touch-action: none` 防止触摸拖动触发页面滚动。拖到容器上下边缘 28px 内自动滚屏，每帧滚动后要 `startY -= delta` 补偿布局偏移，否则被拖行会飘。
 - **行高等分**：行高 = `(100cqh − gap总和) / 行数`，保证可视区恰好整数行（横向 5 行、1:1 六行），不出现半行。`cqh` 基于内容盒，padding 变化自动吸收，但 gap 变化要同步改公式里的扣减值。
-- **滚动指示器**：原生滚动条隐藏（占布局导致左右间隙不等），`showScrollThumb()` 自绘 fixed 浮层，`pointer-events: none` 纯指示，滚动时淡入、停 800ms 淡出，主列表和管理面板共用（z-index 200 > 面板 100）。
+- **回弹留白**：主列表内容溢出时加 `.can-bounce`，首行上方、末行下方各多出 40px 可滚动空白（CSS 伪元素 36px + 4px gap，与 JS 的 `BOUNCE_SPACE` 同步改）。静止位置在内容区内（`scrollTop` ∈ [40, max − 40]），`scrollend` 时若停在留白里就平滑滚回；拖动自动滚屏用 `clampScrollTop()` 限制不进留白。放得下时不加留白（1:1 默认 6 个币种即此情况）。`render()` 不能再用覆盖 `className` 的方式去掉 `is-loading`，否则会丢掉 `.can-bounce` 导致滚动位置跳变。
+- **滚动指示器**：原生滚动条隐藏（占布局导致左右间隙不等），`showScrollThumb()` 自绘铺满视口的 SVG fixed 浮层：2px 线条贴卡片右缘，滚动容器贴着卡片上/下边时轨道带同心圆角（半径 = `CARD_RADIUS` 19 − `INDICATOR_INSET` 4）。内容区滚动时滑块只在直线段移动，滚进回弹留白时绕进圆角并滑出轨道端点，滚到留白尽头只剩 `THUMB_TIP` 长的一段（超过滑块长度时按整个滑块算）；滑块用 `stroke-dasharray/dashoffset` 定位。外层卡片圆角变了要同步改 `CARD_RADIUS`。`pointer-events: none` 纯指示，滚动时淡入、停 800ms 淡出，主列表和管理面板共用（z-index 200 > 面板 100），管理面板没有回弹留白。
 
 ### 持久化
 

@@ -42,14 +42,6 @@ body {
   display: none;
 }
 
-/* 回弹留白：36px + 4px gap = 40px，与 currency.js 的 BOUNCE_SPACE 一致 */
-.currency-widget.can-bounce::before,
-.currency-widget.can-bounce::after {
-  content: '';
-  flex-shrink: 0;
-  height: 36px;
-}
-
 .error {
   display: flex;
   align-items: center;

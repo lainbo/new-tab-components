@@ -252,40 +252,125 @@ function render() {
   }
 
   syncRows(app, selectedCodes)
-  syncBounce(app)
 }
 
-// ---- 回弹留白：主列表可滚动时首行上方、末行下方各留一段空白，滚进去停下后弹回 ----
-const BOUNCE_SPACE = 40 // 与 CSS 中 .can-bounce 的留白一致
+// ---- 越界回弹：主列表滚到头后继续滚，内容按阻尼跟着走、越拉越慢，松手后弹回 ----
+const RUBBER_RATIO = 0.5 // 刚越界时位移与滚动量之比，越界越多比例越小
+const RUBBER_SCALE = 16 // 阻尼衰减尺度（px）：越小减速越早；越界后每多拉出约 11px（RUBBER_SCALE·ln2），所需滚动量翻一倍
+const WHEEL_IDLE = 150 // 滚轮停下多久算松手（ms）
+const FOLLOW_TAU = 40 // 位移追赶滚轮目标的时间常数（ms），让鼠标一格一格的滚动也平滑
+const RETURN_TAU = 90 // 松手后弹回的时间常数（ms）
+let pullRaw = 0 // 越界的原始滚动量：正数为顶部往下拉，负数为底部往上拉
+let pullOffset = 0 // 列表当前的实际位移
+let pullFrame = null
+let pullTime = 0
+let wheelTimer = null
 
-function bounceSpace(el) {
-  return el.classList.contains('can-bounce') ? BOUNCE_SPACE : 0
+// 位移随越界量按对数增长：一直在动，但越往外越难拉
+function rubberband(raw) {
+  return Math.sign(raw) * RUBBER_SCALE * Math.log1p(RUBBER_RATIO * Math.abs(raw) / RUBBER_SCALE)
 }
 
-// 把滚动位置限制在内容区（不含回弹留白）
-function clampScrollTop(el, top) {
-  const space = bounceSpace(el)
-  return Math.min(Math.max(top, space), el.scrollHeight - el.clientHeight - space)
+// rubberband 的反函数：弹回途中再次越界时从当前位移接着拉
+function rubberbandRaw(offset) {
+  return Math.sign(offset) * RUBBER_SCALE / RUBBER_RATIO * Math.expm1(Math.abs(offset) / RUBBER_SCALE)
 }
 
-// 内容溢出才启用留白；首次启用时停在首行，之后只把位置限制在内容区内
-function syncBounce(app) {
-  const overflow = app.scrollHeight - app.clientHeight > bounceSpace(app) * 2
-  app.classList.toggle('can-bounce', overflow)
-  if (overflow) app.scrollTop = clampScrollTop(app, app.scrollTop)
+// delta 为本次滚动量（正数朝顶部方向）；返回 true 表示由越界回弹消耗，调用方需阻止原生滚动
+function pullBy(app, delta) {
+  const max = app.scrollHeight - app.clientHeight
+  if (max <= 0 || drag) return false
+  if (!pullRaw) {
+    const toTop = delta > 0 && app.scrollTop < 1
+    const toBottom = delta < 0 && app.scrollTop > max - 1
+    if (!toTop && !toBottom) return false
+    pullRaw = rubberbandRaw(pullOffset)
+  }
+  // 往回滚时最多回到边缘，剩下的交还给原生滚动
+  const sign = Math.sign(pullRaw || delta)
+  pullRaw = sign * Math.max(sign * (pullRaw + delta), 0)
+  return true
 }
 
-// ---- 滚动指示器：贴卡片右缘的 2px 细线，滚进回弹留白时沿圆角继续往上/下跑；滚动时出现、停止后淡出，不占布局空间 ----
+function applyPull(app) {
+  app.style.translate = pullOffset ? `0 ${pullOffset}px` : ''
+  showScrollThumb(app, pullOffset)
+}
+
+function pullTick(now) {
+  const app = document.getElementById('app')
+  const target = rubberband(pullRaw)
+  const tau = pullRaw ? FOLLOW_TAU : RETURN_TAU
+  pullOffset = target + (pullOffset - target) * Math.exp(-Math.max(now - pullTime, 0) / tau)
+  pullTime = now
+  if (Math.abs(pullOffset - target) < 0.3) pullOffset = target
+  applyPull(app)
+  pullFrame = pullOffset === target ? null : requestAnimationFrame(pullTick)
+}
+
+function animatePull() {
+  if (pullFrame !== null) return
+  pullTime = performance.now()
+  pullFrame = requestAnimationFrame(pullTick)
+}
+
+function releasePull() {
+  if (!pullRaw) return
+  pullRaw = 0
+  animatePull()
+}
+
+let wheelPrev = { abs: 0, sign: 0, time: 0 }
+let inertiaPulled = false // 当前这段衰减的滚轮事件是否已经顶出过一次回弹
+
+// 监听挂在 document 上：列表被拉开后，指针下方可能已是露出的空白，事件不再落到列表上
+function onWheel(e) {
+  if (managerEl?.classList.contains('is-open')) return
+  // 滚动量比上一次小的事件多是触控板惯性的衰减尾巴：只能延续越界、不延长松手计时，
+  // 且同一段惯性只顶出一次回弹，否则惯性滚到头后会撑着一两秒不弹回
+  const abs = Math.abs(e.deltaY)
+  const sign = Math.sign(e.deltaY)
+  const fresh = abs >= wheelPrev.abs || sign !== wheelPrev.sign || e.timeStamp - wheelPrev.time > WHEEL_IDLE
+  wheelPrev = { abs, sign, time: e.timeStamp }
+  if (fresh) inertiaPulled = false
+  else if (inertiaPulled && !pullRaw) return
+
+  const starting = !pullRaw
+  if (!pullBy(document.getElementById('app'), -e.deltaY)) return
+  e.preventDefault()
+  if (fresh || starting) {
+    clearTimeout(wheelTimer)
+    wheelTimer = setTimeout(releasePull, WHEEL_IDLE)
+  }
+  if (!fresh) inertiaPulled = true
+  animatePull()
+}
+
+// 触摸：手指直接带动位移，不做平滑；原生滚动已开始时事件不可取消，交给浏览器处理
+let touchY = 0
+
+function onTouchMove(e) {
+  const y = e.touches[0].clientY
+  const delta = y - touchY
+  touchY = y
+  if (!e.cancelable || !pullBy(e.currentTarget, delta)) return
+  e.preventDefault()
+  pullOffset = rubberband(pullRaw)
+  applyPull(e.currentTarget)
+}
+
+// ---- 滚动指示器：贴卡片右缘的 2px 细线，越界时沿圆角继续往上/下跑；滚动时出现、停止后淡出，不占布局空间 ----
 const CARD_RADIUS = 19 // 外层卡片圆角
 const INDICATOR_INSET = 4 // 指示器中线到卡片边缘的距离，转角半径 = 19 - 4
-const THUMB_TIP = 50 // 滚到回弹留白尽头时滑块剩下的长度
+const THUMB_TIP = 50 // 越界位移达到 THUMB_PULL 后滑块剩下的长度
+const THUMB_PULL = 48 // 滑块缩到 THUMB_TIP 所需的越界位移（约 600px 滚动量），拉得更远时保持最短
 let indicatorEl = null
 let indicatorPath = null
 
-function showScrollThumb(scrollEl) {
+// offset 为滚动容器的越界位移（正数为顶部往下拉）
+function showScrollThumb(scrollEl, offset = 0) {
   const { scrollHeight, clientHeight, scrollTop } = scrollEl
-  const space = bounceSpace(scrollEl)
-  const range = scrollHeight - clientHeight - space * 2 // 内容区的可滚动距离
+  const range = scrollHeight - clientHeight
   if (range <= 0) return
 
   if (!indicatorEl) {
@@ -298,13 +383,16 @@ function showScrollThumb(scrollEl) {
   }
 
   // 轨道：卡片右缘的同心圆角线；滚动容器贴着卡片上/下边时，轨道绕进对应圆角
+  // 越界位移是容器自身的平移，要从 rect 里扣掉才是容器原位置
   const rect = scrollEl.getBoundingClientRect()
+  const rectTop = rect.top - offset
+  const rectBottom = rect.bottom - offset
   const x = innerWidth - INDICATOR_INSET
   const r = CARD_RADIUS - INDICATOR_INSET
-  const roundTop = rect.top < CARD_RADIUS
-  const roundBottom = innerHeight - rect.bottom < CARD_RADIUS
-  const top = roundTop ? CARD_RADIUS : rect.top + INDICATOR_INSET
-  const bottom = roundBottom ? innerHeight - CARD_RADIUS : rect.bottom - INDICATOR_INSET
+  const roundTop = rectTop < CARD_RADIUS
+  const roundBottom = innerHeight - rectBottom < CARD_RADIUS
+  const top = roundTop ? CARD_RADIUS : rectTop + INDICATOR_INSET
+  const bottom = roundBottom ? innerHeight - CARD_RADIUS : rectBottom - INDICATOR_INSET
   const arc = Math.PI * r / 2
   const arcTop = roundTop ? arc : 0
   const arcBottom = roundBottom ? arc : 0
@@ -316,22 +404,17 @@ function showScrollThumb(scrollEl) {
     roundBottom ? `A${r},${r} 0 0 1 ${x - r},${innerHeight - INDICATOR_INSET}` : '',
   ].join(' '))
 
-  // 滑块长度按内容可视比例算；内容区滚动时滑块在直线段内移动，
-  // 滚进上/下留白时绕过圆角并滑出轨道端点，滚到留白尽头只剩 THUMB_TIP 长的一点
+  // 滑块长度按内容可视比例算；正常滚动时滑块在直线段内移动，
+  // 越界时按位移占 THUMB_PULL 的比例绕过圆角、滑出轨道端点，达到 THUMB_PULL 后只剩 THUMB_TIP 长的一点
   const trackLength = arcTop + straight + arcBottom
-  const thumbLength = Math.max(straight * clientHeight / (clientHeight + range), 16)
+  const thumbLength = Math.max(straight * clientHeight / scrollHeight, 16)
   const tip = Math.min(THUMB_TIP, thumbLength) // 剩下的长度最多是整个滑块
   const contentStart = arcTop
   const contentEnd = arcTop + straight - thumbLength
-  const lerp = (from, to, t) => from + (to - from) * Math.min(Math.max(t, 0), 1)
-  let start
-  if (scrollTop < space) {
-    start = lerp(tip - thumbLength, contentStart, scrollTop / space)
-  } else if (scrollTop > space + range) {
-    start = lerp(contentEnd, trackLength - tip, (scrollTop - space - range) / space)
-  } else {
-    start = lerp(contentStart, contentEnd, (scrollTop - space) / range)
-  }
+  const progress = Math.min(Math.max(scrollTop / range, 0), 1)
+  const pull = Math.min(Math.max(offset / THUMB_PULL, -1), 1)
+  const pullTravel = pull > 0 ? contentStart - (tip - thumbLength) : trackLength - tip - contentEnd
+  const start = contentStart + (contentEnd - contentStart) * progress - pull * pullTravel
   indicatorPath.style.strokeDasharray = `${thumbLength} ${trackLength}`
   indicatorPath.style.strokeDashoffset = -start
 
@@ -418,6 +501,8 @@ function onDragStart(e) {
     startY: e.clientY,
     lastY: e.clientY,
     step: row.offsetHeight + gap, // 每交换一次位置，布局位移一行的高度
+    // 被拖行的 transform 会撑大 scrollHeight，自动滚屏以拖动开始时的可滚动距离为上限，否则会一直滚进空白
+    maxScroll: list.scrollHeight - list.clientHeight,
     speed: 0, // 当前自动滚动速度
     raf: null,
   }
@@ -491,7 +576,7 @@ function autoScrollTick() {
   }
   const list = drag.list
   const before = list.scrollTop
-  list.scrollTop = clampScrollTop(list, before + drag.speed)
+  list.scrollTop = Math.min(before + drag.speed, drag.maxScroll)
   const delta = list.scrollTop - before
 
   if (delta === 0) {
@@ -652,11 +737,12 @@ function init() {
 
   // app 级监听只绑定一次（render 会反复重建子节点）
   app.addEventListener('pointerdown', onDragStart)
-  app.addEventListener('scroll', () => showScrollThumb(app), { passive: true })
-  app.addEventListener('scrollend', () => {
-    const top = clampScrollTop(app, app.scrollTop)
-    if (top !== app.scrollTop) app.scrollTo({ top, behavior: 'smooth' })
-  })
+  app.addEventListener('scroll', () => showScrollThumb(app, pullOffset), { passive: true })
+  document.addEventListener('wheel', onWheel, { passive: false })
+  app.addEventListener('touchstart', e => { touchY = e.touches[0].clientY }, { passive: true })
+  app.addEventListener('touchmove', onTouchMove, { passive: false })
+  app.addEventListener('touchend', releasePull)
+  app.addEventListener('touchcancel', releasePull)
   app.addEventListener('focusin', e => {
     if (!e.target.matches('.currency-value')) return
     handleFocus(e)

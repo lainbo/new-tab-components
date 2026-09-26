@@ -74,7 +74,8 @@ body {
 
 .currency-row {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  /* 金额按内容向左扩展；空间不足时优先压缩币种信息 */
+  grid-template-columns: auto minmax(48px, 1fr) minmax(0, max-content);
   align-items: center;
   gap: clamp(6px, 1.5vmin, 10px);
   /* 行高按容器内容区高度等分：恰好显示 5 整行（扣除 4 个 4px gap；cqh 基于内容盒） */
@@ -144,6 +145,7 @@ body {
   align-items: baseline;
   gap: clamp(5px, 1.2vmin, 8px);
   min-width: 0;
+  overflow: hidden;
 }
 
 .currency-flag {
@@ -170,6 +172,7 @@ body {
 }
 
 .currency-value {
+  --value-min-width: clamp(70px, 26cqw, 130px);
   font-family: inherit;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -182,8 +185,11 @@ body {
   padding: clamp(4px, 1vmin, 6px) clamp(6px, 1.5vmin, 8px);
   border-radius: clamp(4px, 1vmin, 6px);
   min-width: 0;
-  width: clamp(70px, 26cqw, 130px);
-  transition: all 180ms ease-out;
+  width: var(--value-min-width);
+  transition:
+    background-color 180ms ease-out,
+    box-shadow 180ms ease-out,
+    color 180ms ease-out;
 }
 
 .currency-value:hover {
@@ -423,8 +429,8 @@ body {
   }
 
   .currency-value {
+    --value-min-width: clamp(60px, 30cqw, 95px);
     font-size: clamp(12px, 6.2cqh, 15px);
-    width: clamp(60px, 30cqw, 95px);
   }
 
   .value-skeleton {
@@ -440,10 +446,20 @@ body {
   }
 
   .currency-value {
-    width: clamp(55px, 20vw, 80px);
+    --value-min-width: clamp(55px, 20vw, 80px);
   }
 
   .value-skeleton {
     width: clamp(55px, 20vw, 80px);
+  }
+}
+
+/* 支持内容自适应的浏览器中，金额随输入长度增长，并让币种名称先省略 */
+@supports (field-sizing: content) {
+  .currency-value {
+    field-sizing: content;
+    width: auto;
+    min-width: var(--value-min-width);
+    max-width: 100%;
   }
 }

@@ -67,7 +67,11 @@ currency/           # 汇率组件（目前唯一的路由）
 
 - 点数字 → 该币种成为基准（行高亮），输入实时重算其他币种
 - 拖左侧圆点手柄 → 排序
-- **双击列表空白处** → 币种管理面板（搜索 + 点选增删，最少保留 2 个）
+- **按住 Ctrl 点击组件任意位置** → 币种管理面板（搜索 + 点选增删，最少保留 2 个）。触摸设备没有 Ctrl，无法打开
+  - 按住 Ctrl 时根元素加 `is-ctrl`，行内元素 `pointer-events: none`，悬停高亮、拖动手柄、金额输入都不响应
+  - 组件在 iframe 里，没焦点时收不到键盘事件，所以 Ctrl 状态同时从 `pointermove` 的 `ctrlKey` 同步；点击由 document 捕获阶段的 `pointerdown` 按 `ctrlKey` 判断并拦截，不依赖 `is-ctrl` 是否已生效
+  - 不要用 `pointerover` 同步：切换 `pointer-events` 后浏览器补发的 `pointerover` 不带修饰键，会把状态误清掉
+  - macOS 上 Ctrl + 点击会触发 `contextmenu`，需 `preventDefault` 屏蔽系统右键菜单
 
 ## 构建与部署
 

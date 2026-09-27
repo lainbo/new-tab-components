@@ -46,6 +46,11 @@ body {
   display: none;
 }
 
+/* 按住 Ctrl：行内元素不响应悬停、拖动和输入，点击统一用于打开币种管理 */
+.is-ctrl .currency-widget * {
+  pointer-events: none;
+}
+
 .error {
   display: flex;
   align-items: center;
@@ -250,7 +255,7 @@ body {
   100% { background-position: -100% 0; }
 }
 
-/* ---- 币种管理面板（双击空白处打开）---- */
+/* ---- 币种管理面板（按住 Ctrl 点击组件打开）---- */
 .manager {
   position: fixed;
   inset: 0;

@@ -611,7 +611,22 @@ function onDragEnd() {
   persistOrder()
 }
 
-// ---- 币种管理面板（双击列表空白处打开）----
+// ---- Ctrl + 点击打开币种管理 ----
+// 按住 Ctrl 时列表内元素不响应指针（见 .is-ctrl 样式）。iframe 没有焦点时收不到键盘事件，
+// 所以状态也从指针事件自带的 ctrlKey 同步，点击是否打开面板同样以 ctrlKey 为准
+function setCtrlMode(on) {
+  document.documentElement.classList.toggle('is-ctrl', on)
+}
+
+// 捕获阶段拦截：拖动手柄和金额输入框都收不到这次点击
+function onCtrlPointerDown(e) {
+  if (!e.ctrlKey || managerEl?.classList.contains('is-open')) return
+  e.preventDefault()
+  e.stopPropagation()
+  openManager()
+}
+
+// ---- 币种管理面板 ----
 let managerEl = null
 let managerCountEl = null
 let managerSearchEl = null
@@ -755,11 +770,20 @@ function init() {
     if (!e.target.matches('.currency-value')) return
     handleBlur(e)
   })
-  app.addEventListener('dblclick', e => {
-    // 仅空白处（列表行以外）触发
-    if (e.target.closest('.currency-row')) return
-    openManager()
+  document.addEventListener('pointerdown', onCtrlPointerDown, true)
+  // macOS 上 Ctrl + 点击会弹出系统右键菜单
+  document.addEventListener('contextmenu', e => {
+    if (e.ctrlKey) e.preventDefault()
   })
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Control') setCtrlMode(true)
+  })
+  document.addEventListener('keyup', e => {
+    if (e.key === 'Control') setCtrlMode(false)
+  })
+  // 只认 pointermove：切换 pointer-events 后浏览器补发的 pointerover 不带修饰键状态，会把 Ctrl 状态误清掉
+  document.addEventListener('pointermove', e => setCtrlMode(e.ctrlKey))
+  window.addEventListener('blur', () => setCtrlMode(false))
 
   loadOrder()
   renderLoading()

@@ -6,7 +6,7 @@
 
 ## 组件
 
-- **汇率换算**（`/currency/`）：166 个币种实时换算、拖动排序、双击管理币种，数据来自 [open.er-api.com](https://open.er-api.com)（每日更新）
+- **汇率换算**（`/currency/`）：166 个币种实时换算、拖动排序、按住 Ctrl 点击管理币种，数据来自 [open.er-api.com](https://open.er-api.com)（每日更新）
 
 ## 特点
 
